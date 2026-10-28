@@ -5,7 +5,11 @@ import pytest
 
 from crosshair.core import proxy_for_type
 from crosshair.libimpl.builtinslib import make_bounded_int
-from crosshair.libimpl.datetimelib import _is_leap_int
+from crosshair.libimpl.datetimelib import (
+    _MAXORDINAL,
+    _alpha_beta_from_ordinal,
+    _is_leap_int,
+)
 from crosshair.statespace import CONFIRMED, EXEC_ERR, POST_FAIL, StateSpace
 from crosshair.test_util import check_states
 from crosshair.tracers import ResumedTracing
@@ -158,10 +162,8 @@ def test_is_leap_int_stays_symbolic(space: StateSpace) -> None:
 
 
 def test_symbolic_date_year_stays_symbolic(space: StateSpace) -> None:
-    # Reading a calendar field off an ordinal-backed date must stay symbolic and
-    # non-forking.  The bridge decomposition (#428) introduces a clean symbolic
-    # `year` linked to the ordinal, so the year is not pinned -- both a leap and a
-    # common year remain reachable after the field access.
+    # Reading a calendar field off a symbolic date must stay symbolic and
+    # non-forking: both a leap and a common year remain reachable afterwards.
     d = proxy_for_type(datetime.date, "d")
     with ResumedTracing():
         year = d.year
@@ -170,10 +172,7 @@ def test_symbolic_date_year_stays_symbolic(space: StateSpace) -> None:
 
 
 def test_symbolic_date_feb29_only_on_leap_years(space: StateSpace) -> None:
-    # Feb 29 is reachable exactly on leap years.  The bridge decomposition adds
-    # the day-validity constraint over the clean symbolic fields, so Feb 29 is
-    # satisfiable only when the year is a leap year -- verified here directly
-    # through the fields (which are non-forking under the bridge).
+    # Feb 29 is reachable exactly on leap years.
     d = proxy_for_type(datetime.date, "d")
     with ResumedTracing():
         feb29 = (d.month == 2) & (d.day == 29)
@@ -181,6 +180,34 @@ def test_symbolic_date_feb29_only_on_leap_years(space: StateSpace) -> None:
         assert space.is_possible((d.year == 2400) & feb29)  # leap (400yr): ok
         assert not space.is_possible((d.year == 2001) & feb29)  # common: no
         assert not space.is_possible((d.year == 1900) & feb29)  # century non-leap
+
+
+@pytest.mark.parametrize(
+    "ordinal",
+    [1, 59, 60, 61, 306, 366, 730, 36524, 36525, 146097, 730120, _MAXORDINAL],
+)
+def test_alpha_beta_from_ordinal_matches_stdlib(ordinal):
+    expected = datetime.date.fromordinal(ordinal)
+    alpha, beta = _alpha_beta_from_ordinal(ordinal)
+    assert (alpha // 12, alpha % 12 + 1, beta + 1) == (
+        expected.year,
+        expected.month,
+        expected.day,
+    )
+
+
+def test_symbolic_date_plus_days_stays_symbolic(space: StateSpace) -> None:
+    d = proxy_for_type(datetime.date, "d")
+    with ResumedTracing():
+        space.add(d.year == 2024)
+        space.add(d.month == 2)
+        shifted = d + datetime.timedelta(days=10)
+        assert space.is_possible(shifted.month == 2)
+        assert space.is_possible(shifted.month == 3)
+        assert not space.is_possible(shifted.month > 3)
+        assert not space.is_possible((shifted.month == 3) & (shifted.day > 10))
+        assert not space.is_possible((shifted - d).days != 10)
+        assert not space.is_possible(shifted <= d)
 
 
 def test_leap_year() -> None:

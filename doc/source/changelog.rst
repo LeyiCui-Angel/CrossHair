@@ -14,6 +14,11 @@ Next Version
  * Symbolic date arithmetic no longer branches on the month when converting
    between calendar fields and ordinals; days-in-month and days-before-month are
    now single arithmetic terms.
+ * Symbolic ``date`` and ``datetime`` values are now represented as a month
+   count plus a zero-based day within the month. Calendar fields derive linearly
+   from that pair, comparisons are lexicographic on it, and day arithmetic
+   that leaves the month converts back from the ordinal with a branch-free
+   closed-form expression.
  * Arguments annotated with ``Annotated``, or with a ``type`` statement whose
    value is ``Annotated`` or a subscripted alias, are now analyzed as their
    underlying type instead of stopping analysis with an error.

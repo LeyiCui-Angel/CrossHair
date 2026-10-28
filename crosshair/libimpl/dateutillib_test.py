@@ -51,7 +51,7 @@ def test_add_year_from_leap_day(space: StateSpace) -> None:
         assert not space.is_possible(result.month != 2)
 
 
-def test_days_only_offset_stays_ordinal_backed(space: StateSpace) -> None:
+def test_days_only_offset_keeps_month_count_and_ordinal(space: StateSpace) -> None:
     d = proxy_for_type(datetime.date, "d")
     with ResumedTracing():
         space.add(1000 < d.year)
@@ -59,6 +59,8 @@ def test_days_only_offset_stays_ordinal_backed(space: StateSpace) -> None:
         result = d + relativedelta(weeks=2, days=3)
         with NoTracing():
             assert result._ymd is None
+            assert result._ab is not None
+            assert result._ord is not None
         assert not space.is_possible((result - d).days != 17)
 
 

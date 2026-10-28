@@ -1,10 +1,9 @@
 """
 Symbolic support for ``dateutil.relativedelta`` applied to dates and datetimes.
 
-A ``relativedelta`` added to a symbolic ``date`` keeps the date's current
-representation whenever possible: offsets measured in days and smaller units
-are applied to the ordinal, while year/month offsets and absolute field
-replacements are applied to the calendar fields with a branch-free day clamp.
+Year/month offsets and absolute field replacements act on the date's month
+count and zero-based day with a branch-free end-of-month clamp; offsets
+measured in days and smaller units are then applied as a ``timedelta``.
 """
 
 from calendar import IllegalMonthError
@@ -19,12 +18,14 @@ from crosshair.libimpl import datetimelib
 from crosshair.libimpl.datetimelib import (
     MAXYEAR,
     MINYEAR,
+    _alpha_beta_of,
+    _alpha_from_ym,
     _check_time_fields,
-    _date_skip_construct,
-    _datetime_from_ordinal,
-    _datetime_skip_construct,
-    _days_in_month_int,
+    _date_from_alpha_beta,
+    _datetime_from_alpha_beta,
+    _days_in_alpha_month,
     _is_leap_int,
+    _ym_from_alpha,
 )
 from crosshair.tracers import NoTracing, ResumedTracing
 
@@ -32,41 +33,39 @@ _DATE_TYPES = (datetimelib.date, datetimelib.datetime, real_date, real_datetime)
 _DATETIME_TYPES = (datetimelib.datetime, real_datetime)
 
 
-def _shift_month(year, month, months):
-    """Add a month offset, carrying into the year; the result month is 1..12."""
-    total_months = year * 12 + (month - 1) + months
-    year = total_months // 12
-    return year, total_months - year * 12 + 1
-
-
-def _calendar_fields(delta: Any, year, month, day):
-    """Return the (year, month, day) that ``delta`` moves the given fields to."""
-    if delta.year:
-        year = delta.year
-    year = year + delta.years
-    if delta.month:
-        month = delta.month
-        if delta.months:
-            month += delta.months
-            if month > 12:
-                year += 1
-                month -= 12
-            elif month < 1:
-                year -= 1
-                month += 12
-        if not (1 <= month <= 12):
-            raise IllegalMonthError(realize(month))
+def _calendar_alpha_beta(delta: Any, alpha, beta):
+    """Return the (alpha, beta) that ``delta`` moves the given month count and day to."""
+    if delta.year or delta.month:
+        year, month = _ym_from_alpha(alpha)
+        if delta.year:
+            year = delta.year
+        year = year + delta.years
+        if delta.month:
+            month = delta.month
+            if delta.months:
+                month += delta.months
+                if month > 12:
+                    year += 1
+                    month -= 12
+                elif month < 1:
+                    year -= 1
+                    month += 12
+            if not (1 <= month <= 12):
+                raise IllegalMonthError(realize(month))
+            alpha = _alpha_from_ym(year, month)
+        else:
+            alpha = _alpha_from_ym(year, month) + delta.months
     else:
-        year, month = _shift_month(year, month, delta.months)
+        alpha = alpha + 12 * delta.years + delta.months
     if delta.day:
-        day = delta.day
-    days_in_month = _days_in_month_int(year, month)
-    day = day - (day > days_in_month) * (day - days_in_month)
-    if not ((MINYEAR <= year) & (year <= MAXYEAR)):
+        beta = delta.day - 1
+    last_beta = _days_in_alpha_month(alpha) - 1
+    beta = beta - (beta > last_beta) * (beta - last_beta)
+    if not ((12 * MINYEAR <= alpha) & (alpha <= 12 * MAXYEAR + 11)):
         raise ValueError("year must be in %d..%d" % (MINYEAR, MAXYEAR))
-    if day < 1:
+    if beta < 0:
         raise ValueError("day is out of range for month")
-    return year, month, day
+    return alpha, beta
 
 
 def _weekday_jump(current_weekday, target: Any):
@@ -85,7 +84,8 @@ def _add_relativedelta(delta: Any, other: Any):
         other_type = type(other)
         is_datetime = other_type in _DATETIME_TYPES
     if delta._has_time and not is_datetime:
-        other = _datetime_from_ordinal(other.toordinal(), 0, 0, 0, 0, None)
+        alpha, beta = _alpha_beta_of(other)
+        other = _datetime_from_alpha_beta(alpha, beta, 0, 0, 0, 0, None)
         is_datetime = True
 
     changes_calendar_fields = (delta.years != 0) | (delta.months != 0)
@@ -108,26 +108,31 @@ def _add_relativedelta(delta: Any, other: Any):
         changes_calendar_fields |= replaces_time_fields
 
     if changes_calendar_fields:
-        year, month, day = _calendar_fields(delta, other.year, other.month, other.day)
+        alpha, beta = _calendar_alpha_beta(delta, *_alpha_beta_of(other))
         if is_datetime:
             if replaces_time_fields:
                 _check_time_fields(hour, minute, second, microsecond, other.fold)
-            result = _datetime_skip_construct(
-                year, month, day, hour, minute, second, microsecond, other.tzinfo
+            result = _datetime_from_alpha_beta(
+                alpha, beta, hour, minute, second, microsecond, other.tzinfo
             )
             result._fold = other.fold
         else:
-            result = _date_skip_construct(year, month, day)
+            result = _date_from_alpha_beta(alpha, beta)
     else:
-        year, month = other.year, other.month
         result = other
 
     days = delta.days
     if delta.leapdays:
-        days = days + delta.leapdays * (month > 2) * _is_leap_int(year)
+        days = days + delta.leapdays * (result.month > 2) * _is_leap_int(result.year)
 
     with NoTracing():
-        offset_parts = (days, delta.hours, delta.minutes, delta.seconds, delta.microseconds)
+        offset_parts = (
+            days,
+            delta.hours,
+            delta.minutes,
+            delta.seconds,
+            delta.microseconds,
+        )
         has_offset = any(type(part) is not int or part != 0 for part in offset_parts)
     if has_offset:
         result = result + real_timedelta(
