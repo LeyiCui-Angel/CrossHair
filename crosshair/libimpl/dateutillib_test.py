@@ -56,10 +56,30 @@ def test_days_only_offset_stays_ordinal_backed(space: StateSpace) -> None:
     with ResumedTracing():
         space.add(1000 < d.year)
         space.add(d.year < 9000)
+        with NoTracing():
+            assert d._ord is None
         result = d + relativedelta(weeks=2, days=3)
         with NoTracing():
+            assert d._ord is not None
             assert result._ymd is None
+            assert result._ord is not None
         assert not space.is_possible((result - d).days != 17)
+
+
+def test_month_offset_stays_field_backed(space: StateSpace) -> None:
+    d = proxy_for_type(datetime.date, "d")
+    with ResumedTracing():
+        space.add(1000 < d.year)
+        space.add(d.year < 9000)
+        result = d + relativedelta(months=1)
+        with NoTracing():
+            assert d._ord is None
+            assert result._ymd is not None
+            assert result._ord is None
+        assert not space.is_possible(result <= d)
+        with NoTracing():
+            assert d._ord is None
+            assert result._ord is None
 
 
 def test_subtract_years_and_months(space: StateSpace) -> None:

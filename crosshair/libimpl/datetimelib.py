@@ -917,11 +917,12 @@ class date:
     # Internal representation.
     #
     # A date is backed by its calendar fields (``_ymd``) and/or its proleptic
-    # Gregorian ordinal (``_ord``); at least one is always present.  Either is
-    # derived from the other lazily and cached, so a program that only does
-    # arithmetic/comparison never pays the nonlinear ordinal<->calendar
-    # conversion, and one that only reads calendar fields never computes an
-    # ordinal.  See https://github.com/pschanely/CrossHair/issues/428.
+    # Gregorian ordinal (``_ord``); at least one is always present, and either
+    # is derived from the other lazily and cached.  Symbolic inputs start with
+    # fields only.  Day offsets (``+ timedelta``) derive the ordinal and yield an
+    # ordinal-backed result; month and year offsets yield a field-backed one.
+    # Comparisons use the fields when both sides carry them and the ordinals
+    # otherwise (see ``_comparable_date_parts``).
 
     def _decompose(self):
         """Lazily derive (year, month, day) from the ordinal, caching the result."""
@@ -1127,14 +1128,17 @@ class date:
         contribute to the result.
         """
         if self._ord is None:
-            # For a components-backed date the ordinal is derived lazily here, on
-            # first arithmetic/comparison, as the inline _ymd2ord(y, m, d)
-            # expression.  Naming it instead with a fresh bridged variable
-            # (ordinal == _ymd2ord(y, m, d)) was measured slower -- the extra
-            # nonlinear bridge equation outweighs any benefit -- so we keep the
-            # inline form.  See #428 / the #427 "more symbolic isn't faster" lesson.
             y, m, d = self._ymd
-            self._ord = _ymd2ord(y, m, d)
+            ordinal = _ymd2ord(y, m, d)
+            with NoTracing():
+                concrete = type(ordinal) is int
+            if not concrete:
+                space = context_statespace()
+                with NoTracing():
+                    bridge = make_bounded_int("ord" + space.uniq(), 1, _MAXORDINAL)
+                space.add(bridge == ordinal)
+                ordinal = bridge
+            self._ord = ordinal
         return self._ord
 
     def replace(self, year=None, month=None, day=None):
@@ -1177,19 +1181,22 @@ class date:
             return self._cmp(other) > 0
         return NotImplemented
 
+    def _comparable_date_parts(self, other) -> Tuple[Tuple, Tuple]:
+        """
+        Return tuples for this date and ``other`` that order the same way the dates do.
+
+        Both tuples are the calendar fields when both dates currently carry them
+        (a concrete ``datetime.date`` always does), and the ordinals otherwise;
+        an ordinal is derived from the fields for a side that lacks one.
+        """
+        other_has_fields = other._ymd is not None if isinstance(other, date) else True
+        if self._ymd is not None and other_has_fields:
+            return self._ymd, (other.year, other.month, other.day)
+        return (self.toordinal(),), (other.toordinal(),)
+
     def _cmp(self, other):
         assert isinstance(other, any_date)
-        # If either side is ordinal-backed, compare ordinals: a single linear
-        # term, and it avoids forcing the nonlinear _ord2ymd decomposition (which
-        # also forks the path).  When both sides carry calendar fields
-        # (component-backed or a concrete date), the lexicographic (y, m, d)
-        # comparison is already fast and computes no ordinal at all.
-        other_ordinal_only = isinstance(other, date) and other._ymd is None
-        if self._ymd is None or other_ordinal_only:
-            return _cmp((self.toordinal(),), (other.toordinal(),))
-        y, m, d = self._year, self._month, self._day
-        y2, m2, d2 = other.year, other.month, other.day
-        return _cmp((y, m, d), (y2, m2, d2))
+        return _cmp(*self._comparable_date_parts(other))
 
     def __hash__(self):
         if self._hashcode == -1:
@@ -2015,8 +2022,7 @@ class datetime(date):
         """Return the date part."""
         if self._ymd is None:
             return _date_from_ordinal(self._ord)
-        y, m, d = self._ymd
-        return date(y, m, d)
+        return _date_skip_construct(*self._ymd)
 
     def time(self):
         """Return the time part, with tzinfo None."""
@@ -2323,17 +2329,7 @@ class datetime(date):
             base_compare = myoff == otoff
 
         if base_compare:
-            # Comparing ordinals is order-equivalent to comparing (y, m, d) but
-            # linear; use it when either side is ordinal-backed to avoid forcing
-            # the nonlinear _ord2ymd decomposition.  Otherwise keep the fast
-            # lexicographic (y, m, d) prefix that computes no ordinal at all.
-            other_ordinal_only = isinstance(other, datetime) and other._ymd is None
-            if self._ymd is None or other_ordinal_only:
-                self_date: Tuple = (self.toordinal(),)
-                other_date: Tuple = (other.toordinal(),)
-            else:
-                self_date = (self._year, self._month, self._day)
-                other_date = (other.year, other.month, other.day)
+            self_date, other_date = self._comparable_date_parts(other)
             return _cmp(
                 (
                     *self_date,
@@ -2682,6 +2678,7 @@ def _datetime_from_ordinal(ordinal, hour, minute, second, microsecond, tzinfo):
 
 
 def _symbolic_date_fields(varname: str) -> Tuple:
+    """Allocate bounded (year, month, day) variables constrained to a valid date."""
     year = make_bounded_int(varname + "_year", MINYEAR, MAXYEAR)
     month = make_bounded_int(varname + "_month", 1, 12)
     day = make_bounded_int(varname + "_day", 1, 31)
@@ -2689,16 +2686,6 @@ def _symbolic_date_fields(varname: str) -> Tuple:
         constraint = _day_in_month_constraint(year, month, day)
     context_statespace().add(constraint)
     return (year, month, day)
-
-
-def _symbolic_date_ordinal(varname: str):
-    """Allocate a symbolic date as a single ordinal in [1, _MAXORDINAL].
-
-    Every integer in that range is a valid date by construction, so (unlike
-    _symbolic_date_fields) no day-validity disjunction is needed, and the
-    nonlinear calendar decomposition is deferred to field access.
-    """
-    return make_bounded_int(varname + "_ord", 1, _MAXORDINAL)
 
 
 def _symbolic_time_fields(varname: str) -> Tuple:
@@ -2732,8 +2719,8 @@ def make_registrations():
     register_patch(real_timezone, lambda *a, **kw: timezone(*a, **kw))
 
     def make_date(p: Any) -> date:
-        ordinal = _symbolic_date_ordinal(p.varname)
-        return _date_from_ordinal(ordinal)
+        year, month, day = _symbolic_date_fields(p.varname)
+        return _date_skip_construct(year, month, day)
 
     register_type(real_date, make_date)
     register_patch(real_date, lambda *a, **kw: date(*a, **kw))
@@ -2747,10 +2734,12 @@ def make_registrations():
     register_patch(real_time, lambda *a, **kw: time(*a, **kw))
 
     def make_datetime(p: Any) -> datetime:
-        ordinal = _symbolic_date_ordinal(p.varname)
+        year, month, day = _symbolic_date_fields(p.varname)
         hour, minute, sec, usec, fold = _symbolic_time_fields(p.varname)
         tzinfo = p(Optional[timezone], "_tzinfo")
-        return _datetime_from_ordinal(ordinal, hour, minute, sec, usec, tzinfo)
+        return _datetime_skip_construct(
+            year, month, day, hour, minute, sec, usec, tzinfo
+        )
 
     register_type(real_datetime, make_datetime)
     register_patch(real_datetime, lambda *a, **kw: datetime(*a, **kw))

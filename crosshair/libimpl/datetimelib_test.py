@@ -4,11 +4,11 @@ import datetime
 import pytest
 
 from crosshair.core import proxy_for_type
-from crosshair.libimpl.builtinslib import make_bounded_int
+from crosshair.libimpl.builtinslib import make_bounded_int, smt_not
 from crosshair.libimpl.datetimelib import _is_leap_int
 from crosshair.statespace import CONFIRMED, EXEC_ERR, POST_FAIL, StateSpace
 from crosshair.test_util import check_states
-from crosshair.tracers import ResumedTracing
+from crosshair.tracers import NoTracing, ResumedTracing
 
 
 def test_timedelta_symbolic_months_fail() -> None:
@@ -157,23 +157,67 @@ def test_is_leap_int_stays_symbolic(space: StateSpace) -> None:
         assert space.is_possible((result == 0).var)  # ...and common
 
 
+def test_symbolic_date_starts_field_backed(space: StateSpace) -> None:
+    d = proxy_for_type(datetime.date, "d")
+    with NoTracing():
+        assert d._ymd is not None
+        assert d._ord is None
+    with ResumedTracing():
+        space.add(1000 < d.year)
+        space.add(d.year < 9000)
+        shifted = d + datetime.timedelta(days=1)
+        with NoTracing():
+            assert d._ord is not None
+            assert shifted._ord is not None
+            assert shifted._ymd is None
+        assert not space.is_possible((shifted - d).days != 1)
+
+
+def test_symbolic_date_comparison_picks_shared_representation(
+    space: StateSpace,
+) -> None:
+    d1 = proxy_for_type(datetime.date, "d1")
+    d2 = proxy_for_type(datetime.date, "d2")
+    with ResumedTracing():
+        space.add(1000 < d1.year)
+        space.add(d1.year < 9000)
+        both_fields = d1 < d2
+        with NoTracing():
+            assert d1._ord is None
+            assert d2._ord is None
+        shifted = d1 + datetime.timedelta(days=5)
+        with NoTracing():
+            assert d2._ord is None
+        mixed = shifted < d2
+        with NoTracing():
+            assert d2._ord is not None
+        assert space.is_possible(both_fields & mixed)
+        assert space.is_possible(both_fields & smt_not(mixed))
+        assert not space.is_possible(shifted <= d1)
+        assert not space.is_possible((shifted == d2) & (d1 >= d2))
+
+
 def test_symbolic_date_year_stays_symbolic(space: StateSpace) -> None:
-    # Reading a calendar field off an ordinal-backed date must stay symbolic and
-    # non-forking.  The bridge decomposition (#428) introduces a clean symbolic
-    # `year` linked to the ordinal, so the year is not pinned -- both a leap and a
-    # common year remain reachable after the field access.
+    # Reading a calendar field off an ordinal-backed date (here, the result of
+    # day arithmetic) must stay symbolic and non-forking: the bridge decomposition
+    # introduces a clean symbolic `year` linked to the ordinal, so the year is
+    # not pinned -- both a leap and a common year remain reachable.
     d = proxy_for_type(datetime.date, "d")
     with ResumedTracing():
-        year = d.year
+        space.add(1000 < d.year)
+        space.add(d.year < 9000)
+        shifted = d + datetime.timedelta(days=1)
+        with NoTracing():
+            assert shifted._ymd is None
+        year = shifted.year
         assert space.is_possible(year == 2000)  # leap reachable
         assert space.is_possible(year == 2001)  # common reachable
 
 
 def test_symbolic_date_feb29_only_on_leap_years(space: StateSpace) -> None:
-    # Feb 29 is reachable exactly on leap years.  The bridge decomposition adds
-    # the day-validity constraint over the clean symbolic fields, so Feb 29 is
-    # satisfiable only when the year is a leap year -- verified here directly
-    # through the fields (which are non-forking under the bridge).
+    # Feb 29 is reachable exactly on leap years: the day-validity constraint over
+    # the symbolic fields makes Feb 29 satisfiable only when the year is a leap
+    # year, without forking on the fields.
     d = proxy_for_type(datetime.date, "d")
     with ResumedTracing():
         feb29 = (d.month == 2) & (d.day == 29)
