@@ -731,6 +731,14 @@ def apply_smt(op: BinFn, x: z3.ExprRef, y: z3.ExprRef) -> z3.ExprRef:
             if op != ops.truediv and z3.is_fp(x):
                 concrete = op(space.find_model_value(x), space.find_model_value(y))
                 return z3.FPVal(concrete, x.sort())
+            if z3.is_int_value(y):
+                divisor = y.as_long()
+                if divisor == 0:
+                    raise ZeroDivisionError
+                if divisor > 0 and op in (ops.floordiv, ops.mod):
+                    # SMT integer division and modulo by a positive divisor
+                    # already have Python's floor semantics.
+                    return x / y if op == ops.floordiv else x % y
             iszero = (fpEQ(y, 0.0)) if isinstance(y, z3.FPRef) else (y == 0)
             if space.smt_fork(iszero):
                 raise ZeroDivisionError

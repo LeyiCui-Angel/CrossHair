@@ -1,10 +1,10 @@
 """
 Symbolic support for ``dateutil.relativedelta`` applied to dates and datetimes.
 
-A ``relativedelta`` added to a symbolic ``date`` keeps the date's current
-representation whenever possible: offsets measured in days and smaller units
-are applied to the ordinal, while year/month offsets and absolute field
-replacements are applied to the calendar fields with a branch-free day clamp.
+Year/month offsets and absolute field replacements are applied to the
+calendar fields with a branch-free day clamp; the remaining day offset is then
+added through ``date.__add__``, which steps the calendar fields one day at a
+time.
 """
 
 from calendar import IllegalMonthError
@@ -21,7 +21,6 @@ from crosshair.libimpl.datetimelib import (
     MINYEAR,
     _check_time_fields,
     _date_skip_construct,
-    _datetime_from_ordinal,
     _datetime_skip_construct,
     _days_in_month_int,
     _is_leap_int,
@@ -85,7 +84,9 @@ def _add_relativedelta(delta: Any, other: Any):
         other_type = type(other)
         is_datetime = other_type in _DATETIME_TYPES
     if delta._has_time and not is_datetime:
-        other = _datetime_from_ordinal(other.toordinal(), 0, 0, 0, 0, None)
+        other = _datetime_skip_construct(
+            other.year, other.month, other.day, 0, 0, 0, 0, None
+        )
         is_datetime = True
 
     changes_calendar_fields = (delta.years != 0) | (delta.months != 0)
@@ -127,7 +128,13 @@ def _add_relativedelta(delta: Any, other: Any):
         days = days + delta.leapdays * (month > 2) * _is_leap_int(year)
 
     with NoTracing():
-        offset_parts = (days, delta.hours, delta.minutes, delta.seconds, delta.microseconds)
+        offset_parts = (
+            days,
+            delta.hours,
+            delta.minutes,
+            delta.seconds,
+            delta.microseconds,
+        )
         has_offset = any(type(part) is not int or part != 0 for part in offset_parts)
     if has_offset:
         result = result + real_timedelta(

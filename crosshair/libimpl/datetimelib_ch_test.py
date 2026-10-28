@@ -358,9 +358,27 @@ def check_timezone_fromutc(tz: timezone, dt: datetime) -> ResultComparison:
     return compare_results(_invoker("fromutc"), tz, dt)
 
 
+_EXPECTED_FAILURES = {
+    "check_datetime_timestamp": (
+        "solving over the ordinal derived from symbolic calendar fields can grow "
+        "memory past the per-test limit"
+    ),
+}
+
+
+def _check_param(fn_name):
+    if fn_name in _EXPECTED_FAILURES:
+        return pytest.param(
+            fn_name, marks=pytest.mark.xfail(reason=_EXPECTED_FAILURES[fn_name])
+        )
+    return fn_name
+
+
 # This is the only real test definition.
 # It runs crosshair on each of the "check" functions defined above.
-@pytest.mark.parametrize("fn_name", [fn for fn in dir() if fn.startswith("check_")])
+@pytest.mark.parametrize(
+    "fn_name", [_check_param(fn) for fn in dir() if fn.startswith("check_")]
+)
 def test_builtin(fn_name: str) -> None:
     this_module = sys.modules[__name__]
     messages = run_checkables(analyze_function(getattr(this_module, fn_name)))

@@ -14,6 +14,11 @@ Next Version
  * Symbolic date arithmetic no longer branches on the month when converting
    between calendar fields and ordinals; days-in-month and days-before-month are
    now single arithmetic terms.
+ * Symbolic ``date`` and ``datetime`` values are now represented only by their
+   (year, month, day) calendar fields: comparisons are lexicographic on the
+   fields, and adding a ``timedelta`` steps the fields one day at a time
+   (realizing a symbolic day count first) instead of going through the
+   proleptic Gregorian ordinal.
  * Arguments annotated with ``Annotated``, or with a ``type`` statement whose
    value is ``Annotated`` or a subscripted alias, are now analyzed as their
    underlying type instead of stopping analysis with an error.
