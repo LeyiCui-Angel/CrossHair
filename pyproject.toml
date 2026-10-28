@@ -58,6 +58,7 @@ dev = [
     "numpy==2.5.3; python_version >= '3.12'",
     "pre-commit~=4.3",
     "pytest==9.1.1",
+    "python-dateutil>=2.8",  # exercised by crosshair/libimpl/dateutillib*_test.py
     "pytest-xdist==3.8.0",
     "setuptools",
     "sphinx>=3.4.3",

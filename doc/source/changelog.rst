@@ -6,6 +6,14 @@ Changelog
 Next Version
 ---------------
 
+ * Add symbolic support for ``dateutil.relativedelta`` added to (or subtracted
+   from) ``date`` and ``datetime`` values, including year/month offsets with
+   end-of-month clamping, absolute field replacement, and relative weekday
+   targeting. Symbolic ``relativedelta`` arguments can also be generated.
+   (`see #431 <https://github.com/pschanely/CrossHair/issues/431>`__)
+ * Symbolic date arithmetic no longer branches on the month when converting
+   between calendar fields and ordinals; days-in-month and days-before-month are
+   now single arithmetic terms.
  * Arguments annotated with ``Annotated``, or with a ``type`` statement whose
    value is ``Annotated`` or a subscripted alias, are now analyzed as their
    underlying type instead of stopping analysis with an error.

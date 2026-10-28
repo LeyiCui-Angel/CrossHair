@@ -102,6 +102,21 @@ def _days_before_year(year):
     return y * 365 + y // 4 - y // 100 + y // 400
 
 
+def _days_in_month_int(year, month):
+    """year, month -> number of days in that month, as a single arithmetic term.
+
+    Uses only arithmetic, comparisons and bitwise ``|`` so that a symbolic month
+    or year is neither realized nor forked.
+    """
+    is_30_day_month = (month == 4) | (month == 6) | (month == 9) | (month == 11)
+    is_february = month == 2
+    with NoTracing():
+        known_not_february = type(is_february) is bool and not is_february
+    if known_not_february:
+        return 31 - is_30_day_month
+    return 31 - is_30_day_month - is_february * (3 - _is_leap_int(year))
+
+
 def _days_in_month(year, month):
     """year, month -> number of days in that month in that year."""
     # NB: _DAYS_IN_MONTH[month] would also keep `month` symbolic (symbolic
@@ -142,16 +157,25 @@ def _day_in_month_constraint(year, month, day):
 
 
 def _days_before_month(year, month):
-    """year, month -> number of days in year preceding first day of month."""
+    """year, month -> number of days in the year preceding first day of month.
+
+    Arithmetic closed form (no table lookup), so a symbolic month stays symbolic
+    instead of fanning out over the twelve table entries.
+    """
     assert 1 <= month <= 12, "month must be in 1..12"
-    return _DAYS_BEFORE_MONTH[month] + (month > 2) * _is_leap_int(year)
+    days_in_regular_year = (367 * month - 362) // 12
+    is_after_february = month > 2
+    with NoTracing():
+        known_before_march = type(is_after_february) is bool and not is_after_february
+    if known_before_march:
+        return days_in_regular_year
+    return days_in_regular_year - is_after_february * (2 - _is_leap_int(year))
 
 
 def _ymd2ord(year, month, day):
     """year, month, day -> ordinal, considering 01-Jan-0001 as day 1."""
     assert 1 <= month <= 12, "month must be in 1..12"
-    dim = _days_in_month(year, month)
-    assert 1 <= day <= dim, "day must be in 1..%d" % dim
+    assert 1 <= day <= _days_in_month_int(year, month), "day is out of range for month"
     return _days_before_year(year) + _days_before_month(year, month) + day
 
 
@@ -923,10 +947,7 @@ class date:
                     month = make_bounded_int("dcm" + suffix, 1, 12)
                     day = make_bounded_int("dcd" + suffix, 1, 31)
                 bridge_ordinal = (
-                    _days_before_year(year)
-                    + _DAYS_BEFORE_MONTH[month]
-                    + (month > 2) * _is_leap_int(year)
-                    + day
+                    _days_before_year(year) + _days_before_month(year, month) + day
                 )
                 space.add(ordinal == bridge_ordinal)
                 space.add(_day_in_month_constraint(year, month, day))

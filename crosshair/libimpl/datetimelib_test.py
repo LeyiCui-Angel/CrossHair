@@ -247,3 +247,20 @@ def test_utcoffset_keeps_aware_datetime_symbolic(space, tz):
         d.utcoffset()
         assert space.is_possible(d.year == 2000)
         assert space.is_possible(d.year != 2000)
+
+
+@pytest.mark.parametrize("year", [1, 1900, 2000, 2023, 2024, 9999])
+@pytest.mark.parametrize("month", range(1, 13))
+def test_month_arithmetic_matches_calendar(year, month):
+    from crosshair.libimpl.datetimelib import (
+        _DAYS_BEFORE_MONTH,
+        _DAYS_IN_MONTH,
+        _days_before_month,
+        _days_in_month_int,
+        _is_leap,
+    )
+
+    leap_shift = month > 2 and _is_leap(year)
+    assert _days_before_month(year, month) == _DAYS_BEFORE_MONTH[month] + leap_shift
+    feb_shift = month == 2 and _is_leap(year)
+    assert _days_in_month_int(year, month) == _DAYS_IN_MONTH[month] + feb_shift
