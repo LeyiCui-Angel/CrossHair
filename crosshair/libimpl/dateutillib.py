@@ -1,10 +1,10 @@
 """
 Symbolic support for ``dateutil.relativedelta`` applied to dates and datetimes.
 
-A ``relativedelta`` added to a symbolic ``date`` keeps the date's current
-representation whenever possible: offsets measured in days and smaller units
-are applied to the ordinal, while year/month offsets and absolute field
-replacements are applied to the calendar fields with a branch-free day clamp.
+Offsets measured in days and smaller units are added to the date's ordinal.
+Year/month offsets and absolute field replacements are applied to the calendar
+fields with a branch-free day clamp, and the result is converted back to an
+ordinal.
 """
 
 from calendar import IllegalMonthError
@@ -20,11 +20,11 @@ from crosshair.libimpl.datetimelib import (
     MAXYEAR,
     MINYEAR,
     _check_time_fields,
-    _date_skip_construct,
+    _date_from_ordinal,
     _datetime_from_ordinal,
-    _datetime_skip_construct,
     _days_in_month_int,
     _is_leap_int,
+    _ymd2ord,
 )
 from crosshair.tracers import NoTracing, ResumedTracing
 
@@ -109,15 +109,22 @@ def _add_relativedelta(delta: Any, other: Any):
 
     if changes_calendar_fields:
         year, month, day = _calendar_fields(delta, other.year, other.month, other.day)
+        ordinal = _ymd2ord(year, month, day)
         if is_datetime:
             if replaces_time_fields:
                 _check_time_fields(hour, minute, second, microsecond, other.fold)
-            result = _datetime_skip_construct(
-                year, month, day, hour, minute, second, microsecond, other.tzinfo
+            result = _datetime_from_ordinal(
+                ordinal,
+                hour,
+                minute,
+                second,
+                microsecond,
+                other.tzinfo,
+                fields=(year, month, day),
             )
             result._fold = other.fold
         else:
-            result = _date_skip_construct(year, month, day)
+            result = _date_from_ordinal(ordinal, fields=(year, month, day))
     else:
         year, month = other.year, other.month
         result = other
@@ -127,7 +134,13 @@ def _add_relativedelta(delta: Any, other: Any):
         days = days + delta.leapdays * (month > 2) * _is_leap_int(year)
 
     with NoTracing():
-        offset_parts = (days, delta.hours, delta.minutes, delta.seconds, delta.microseconds)
+        offset_parts = (
+            days,
+            delta.hours,
+            delta.minutes,
+            delta.seconds,
+            delta.microseconds,
+        )
         has_offset = any(type(part) is not int or part != 0 for part in offset_parts)
     if has_offset:
         result = result + real_timedelta(

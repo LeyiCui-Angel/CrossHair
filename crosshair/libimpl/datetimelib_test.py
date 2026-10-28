@@ -1,11 +1,13 @@
 import calendar
 import datetime
+import random
 
 import pytest
+import z3
 
 from crosshair.core import proxy_for_type
 from crosshair.libimpl.builtinslib import make_bounded_int
-from crosshair.libimpl.datetimelib import _is_leap_int
+from crosshair.libimpl.datetimelib import _MAXORDINAL, _is_leap_int, _ord2ymd_smt
 from crosshair.statespace import CONFIRMED, EXEC_ERR, POST_FAIL, StateSpace
 from crosshair.test_util import check_states
 from crosshair.tracers import ResumedTracing
@@ -157,11 +159,35 @@ def test_is_leap_int_stays_symbolic(space: StateSpace) -> None:
         assert space.is_possible((result == 0).var)  # ...and common
 
 
+def _sample_ordinals():
+    ordinals = {1, 2, 59, 60, 365, 366, 730, 731, _MAXORDINAL - 1, _MAXORDINAL}
+    for year in (1, 4, 100, 400, 401, 1900, 2000, 2001, 2100, 2400, 9999):
+        for month in range(1, 13):
+            for day in (1, 28, 29, 30, 31):
+                try:
+                    ordinals.add(datetime.date(year, month, day).toordinal())
+                except ValueError:
+                    pass
+    rng = random.Random(0)
+    ordinals.update(rng.randint(1, _MAXORDINAL) for _ in range(1000))
+    return sorted(ordinals)
+
+
+def test_ord2ymd_smt_matches_fromordinal() -> None:
+    ordinal = z3.Int("ordinal")
+    fields = _ord2ymd_smt(ordinal)
+    for n in _sample_ordinals():
+        expected = datetime.date.fromordinal(n)
+        year, month, day = (
+            z3.simplify(z3.substitute(field, (ordinal, z3.IntVal(n)))).as_long()
+            for field in fields
+        )
+        assert (year, month, day) == (expected.year, expected.month, expected.day)
+
+
 def test_symbolic_date_year_stays_symbolic(space: StateSpace) -> None:
-    # Reading a calendar field off an ordinal-backed date must stay symbolic and
-    # non-forking.  The bridge decomposition (#428) introduces a clean symbolic
-    # `year` linked to the ordinal, so the year is not pinned -- both a leap and a
-    # common year remain reachable after the field access.
+    # Reading a calendar field off a symbolic date must stay symbolic and
+    # non-forking: both a leap and a common year remain reachable afterwards.
     d = proxy_for_type(datetime.date, "d")
     with ResumedTracing():
         year = d.year
@@ -170,10 +196,8 @@ def test_symbolic_date_year_stays_symbolic(space: StateSpace) -> None:
 
 
 def test_symbolic_date_feb29_only_on_leap_years(space: StateSpace) -> None:
-    # Feb 29 is reachable exactly on leap years.  The bridge decomposition adds
-    # the day-validity constraint over the clean symbolic fields, so Feb 29 is
-    # satisfiable only when the year is a leap year -- verified here directly
-    # through the fields (which are non-forking under the bridge).
+    # The calendar fields are derived from the ordinal, so Feb 29 is satisfiable
+    # only when the year is a leap year.
     d = proxy_for_type(datetime.date, "d")
     with ResumedTracing():
         feb29 = (d.month == 2) & (d.day == 29)

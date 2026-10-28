@@ -51,7 +51,7 @@ def test_add_year_from_leap_day(space: StateSpace) -> None:
         assert not space.is_possible(result.month != 2)
 
 
-def test_days_only_offset_stays_ordinal_backed(space: StateSpace) -> None:
+def test_days_only_offset_does_not_derive_calendar_fields(space: StateSpace) -> None:
     d = proxy_for_type(datetime.date, "d")
     with ResumedTracing():
         space.add(1000 < d.year)
